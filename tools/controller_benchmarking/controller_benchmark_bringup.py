@@ -26,7 +26,7 @@ def generate_launch_description():
     benchmark_dir = os.getcwd()
     #metrics_py = os.path.join(benchmark_dir, 'metrics.py')
     config = os.path.join(get_package_share_directory('nav2_bringup'), 'params', 'nav2_params.yaml')
-    map_file = os.path.join(benchmark_dir,'25by25_20.pgm')
+    map_file = os.path.join(benchmark_dir,'25by25_20.yaml')
     lifecycle_nodes = ['map_server', 'planner_server', 'controller_server']
 
     static_transform_one = Node(
