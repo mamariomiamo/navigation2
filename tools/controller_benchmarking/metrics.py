@@ -168,6 +168,10 @@ class OdomBroadcaster(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
 def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose, controller_frequency):
+    # Initialize results
+    task_twists = []
+    task_poses = []
+    task_results = []
 
     cmd_vel_subscriber_node = CmdVelListener()
 
@@ -185,6 +189,9 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
         print("Getting controller: ", controller)
         i = 0
         navigator.followPath(path.path)
+        task_controller_twists = []
+        task_controller_poses = []
+
         while not navigator.isTaskComplete():
             # feedback does not provide both linear and angular
             # we get velocities from cmd_vel
@@ -192,6 +199,8 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
 
             # Update "virtual" pose considering twist 
             pose = SimulateMovement(pose,cmd_vel_subscriber_node.twist_msg,controller_frequency)
+            task_controller_poses.append(pose)
+            task_controller_twists.append(cmd_vel_subscriber_node.twist_msg)
 
             # Provide odom to controller for next loop
             odom_msg.pose.pose = pose.pose
@@ -210,15 +219,19 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
             odom_to_baselink_tf_msg.transform.translation.z = odom_msg.pose.pose.position.z
             odom_tf_broadcaster.tf_broadcaster.sendTransform(odom_to_baselink_tf_msg)
             # Do something with the feedback
-            # TODO metrics should be gathered here
-
+        task_results.append(navigator.getResult())
+        task_twists.append(task_controller_twists)
+        task_poses.append(task_controller_poses)
     cmd_vel_subscriber_node.destroy_node()
+    return task_results, task_twists, task_poses
 
 def main():
     rclpy.init()
 
+    # A sleep for ensuring the Nav2 part is up, before senfing the tf
     time.sleep(4)
     navigator = BasicNavigator()
+
     odom_tf_broadcaster = OdomBroadcaster()
     odom_to_baselink_tf_msg = TransformStamped()
     odom_to_baselink_tf_msg.header.frame_id = 'odom'
@@ -231,14 +244,22 @@ def main():
     navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
     # Set map to use, other options: 100by100_15, 100by100_10
-    map_path = os.getcwd() + '/' + glob.glob('**/100by100_20.yaml', recursive=True)[0]
-    navigator.changeMap(map_path)
+    map_controller_path = os.getcwd() + '/' + glob.glob('**/25by25_20_local_costmap.yaml', recursive=True)[0]
+    map_path = os.getcwd() + '/' + glob.glob('**/25by25_20.yaml', recursive=True)[0]
+
+    # Set map with ALL obstacles since this is for generating start and end 
+    navigator.changeMap(map_controller_path)
     time.sleep(2)   
 
     # Get the costmap for start/goal validation
     costmap_msg = navigator.getGlobalCostmap()
     costmap = np.asarray(costmap_msg.data)
     costmap.resize(costmap_msg.metadata.size_y, costmap_msg.metadata.size_x)
+
+    # Now set real map "obstacle" to benchmark controller are not present here
+    # Planner must use this map
+    navigator.changeMap(map_path)
+    time.sleep(2)  
 
     planners = ['GridBased']
     controllers = ['FollowPath']
@@ -247,32 +268,42 @@ def main():
     max_cost = 210
     side_buffer = 100
     time_stamp = navigator.get_clock().now().to_msg()
-    results = []
+    planner_results = []
+    controllers_results = []
     seed(33)
 
-    random_pairs = 10
+    random_pairs = 1
     res = costmap_msg.metadata.resolution
     i = 0
-    while len(results) != random_pairs:
+    while len(planner_results) != random_pairs:
         print("Cycle: ", i, "out of: ", random_pairs)
         start = getRandomStart(costmap, max_cost, side_buffer, time_stamp, res)
         goal = getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res)
 
         print("Start", start)
         print("Goal", goal)
-
+        navigator.changeMap(map_path)
+        time.sleep(2)  
         result = getPlannerResults(odom_tf_broadcaster, navigator, start, goal, planners)
         if len(result) == len(planners):
-            results.append(result)
+            planner_results.append(result)
         else:
             print("One of the planners was invalid")
             continue
-
-        getControllerResults(odom_tf_broadcaster, navigator, result[0], controllers, start, controller_frequency)
+        # Change back map, planner will no more use this. Local costmap uses this map
+        # with obstalce info
+        navigator.changeMap(map_controller_path)
+        time.sleep(2)  
+        controllers_result = getControllerResults(odom_tf_broadcaster, navigator, result[0], controllers, start, controller_frequency)
+        controllers_results.append(controllers_result)
         i = i +1
 
     print("Write Results...")
+    with open(os.getcwd() + '/controllers_results.pickle', 'wb+') as f:
+        pickle.dump(controllers_results, f, pickle.HIGHEST_PROTOCOL)
 
+    with open(os.getcwd() + '/planner_results.pickle', 'wb+') as f:
+        pickle.dump(planner_results, f, pickle.HIGHEST_PROTOCOL)
     # TODO save results once we have them
     print("Write Complete")
     exit(0)

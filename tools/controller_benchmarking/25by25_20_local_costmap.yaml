@@ -1,4 +1,4 @@
-image: 25by25_20.pgm
+image: 25by25_20_local_costmap.pgm
 resolution: 0.05
 origin: [0.0, 0.000000, 0.000000]
 negate: 1
