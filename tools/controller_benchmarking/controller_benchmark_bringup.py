@@ -33,7 +33,8 @@ def generate_launch_description():
          package = 'tf2_ros',
          executable = 'static_transform_publisher',
          output = 'screen',
-         arguments = ["0", "0", "0", "0", "0", "0", "odom", "map"])
+         arguments = ["0", "0", "0", "0", "0", "0", "odom", "map"],
+         parameters= [{'use_sim_time': True}])
 
     start_map_server_cmd = Node(
         package='nav2_map_server',
@@ -49,14 +50,16 @@ def generate_launch_description():
         executable='planner_server',
         name='planner_server',
         output='screen',
-        parameters=[config])
+        parameters=[config,
+                    {'use_sim_time': True}])
 
     start_controller_server_cmd = Node(
         package='nav2_controller',
         executable='controller_server',
         name='controller_server',
         output='screen',
-        parameters=[config])
+        parameters=[config,
+                    {'use_sim_time': True}])
 
     start_lifecycle_manager_cmd = Node(
         package='nav2_lifecycle_manager',
@@ -71,7 +74,8 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(nav2_bringup_dir, 'launch', 'rviz_launch.py')),
         launch_arguments={'namespace': '',
-                          'use_namespace': 'False'}.items())
+                            'use_sim_time': 'True' , 
+                            'use_namespace': 'False'}.items())
 
     #metrics_cmd = ExecuteProcess(
     #    cmd=['python3', '-u', metrics_py],

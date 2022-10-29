@@ -20,6 +20,7 @@ from nav_msgs.msg import Odometry
 from nav2_simple_commander.robot_navigator import BasicNavigator
 import rclpy
 from rclpy.node import Node
+import threading
 
 from tf2_ros import TransformBroadcaster
 from ament_index_python.packages import get_package_share_directory
@@ -41,12 +42,11 @@ from transforms3d.euler import euler2quat, quat2euler
 
 def getPlannerResults(odom_tf_broadcaster, navigator, initial_pose, goal_pose, planners):
     results = []
-    odom_tf_broadcaster
-
     # Publish tf with initialpose (specifically initialpose is not required, could be at origin )
     odom_to_baselink_tf_msg = TransformStamped()
     odom_to_baselink_tf_msg.header.frame_id = 'odom'
     odom_to_baselink_tf_msg.child_frame_id = 'base_link'
+    rclpy.spin_once(odom_tf_broadcaster)
     odom_to_baselink_tf_msg.header.stamp = odom_tf_broadcaster.get_clock().now().to_msg()
     odom_to_baselink_tf_msg.transform.rotation.x = initial_pose.pose.orientation.x
     odom_to_baselink_tf_msg.transform.rotation.y = initial_pose.pose.orientation.y
@@ -142,7 +142,8 @@ def SimulateMovement(pose, twist, frequency):
 class CmdVelListener(Node):
 
     def __init__(self):
-        super().__init__('benchmark_cmd_vel_node')
+        super().__init__('benchmark_cmd_vel_node',
+            cli_args= ['--ros-args','-p', 'use_sim_time:=True' ])
         self.twist_msg = Twist()
         self.subscription = self.create_subscription(
             Twist,
@@ -157,13 +158,16 @@ class CmdVelListener(Node):
 class OdomPublisher(Node):
 
     def __init__(self):
-        super().__init__('odom_publisher')
+        super().__init__('odom_publisher',
+            cli_args= ['--ros-args','-p', 'use_sim_time:=True' ])
         self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
 
 class OdomBroadcaster(Node):
 
     def __init__(self):
-        super().__init__('odom_broadcaster')
+        super().__init__('odom_broadcaster',
+            cli_args= ['--ros-args','-p', 'use_sim_time:=True' ])
+                        #parameter_overrides = [rclpy.parameter.Parameter('use_sim_time',type_=rclpy.parameter.Parameter.Type.BOOL , value=True)])
         # Initialize the transform broadcaster
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -179,12 +183,13 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
     odom_to_baselink_tf_msg = TransformStamped()
     odom_to_baselink_tf_msg.header.frame_id = 'odom'
     odom_to_baselink_tf_msg.child_frame_id = 'base_link'
+    rclpy.spin_once(odom_node)
     odom_to_baselink_tf_msg.header.stamp = odom_node.get_clock().now().to_msg()
 
     for controller in controllers:
         print("Getting controller: ", controller)
         i = 0
-        navigator.followPath(path.path)
+        navigator.followPath(path.path, controller)
         while not navigator.isTaskComplete():
             # feedback does not provide both linear and angular
             # we get velocities from cmd_vel
@@ -196,6 +201,7 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
             # Provide odom to controller for next loop
             odom_msg.pose.pose = pose.pose
             odom_msg.twist.twist = cmd_vel_subscriber_node.twist_msg
+            rclpy.spin_once(odom_node)
             odom_msg.header.stamp = odom_node.get_clock().now().to_msg()
             odom_node.odom_pub.publish(odom_msg)
 
@@ -219,16 +225,22 @@ def main():
 
     time.sleep(4)
     navigator = BasicNavigator()
+
     odom_tf_broadcaster = OdomBroadcaster()
+
     odom_to_baselink_tf_msg = TransformStamped()
     odom_to_baselink_tf_msg.header.frame_id = 'odom'
     odom_to_baselink_tf_msg.child_frame_id = 'base_link'
+    rclpy.spin_once(odom_tf_broadcaster)
     odom_to_baselink_tf_msg.header.stamp = odom_tf_broadcaster.get_clock().now().to_msg()
     odom_tf_broadcaster.tf_broadcaster.sendTransform(odom_to_baselink_tf_msg)
 
+    time_stamp = navigator.get_clock().now().to_msg()
+    print(time_stamp)
+    
     # Wait for planner and controller to fully activate
     print("Waiting for planner and controller servers to activate")
-    navigator.waitUntilNav2Active('planner_server', 'controller_server')
+    #navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
     # Set map to use, other options: 100by100_15, 100by100_10
     map_path = os.getcwd() + '/' + glob.glob('**/100by100_20.yaml', recursive=True)[0]
@@ -246,7 +258,9 @@ def main():
     controller_frequency = 20 #Hz
     max_cost = 210
     side_buffer = 100
+    rclpy.spin_once(navigator)
     time_stamp = navigator.get_clock().now().to_msg()
+    print(time_stamp)
     results = []
     seed(33)
 
