@@ -17,7 +17,7 @@
 
 from geometry_msgs.msg import PoseStamped, Twist, TransformStamped
 from nav_msgs.msg import Odometry
-from nav2_simple_commander.robot_navigator import BasicNavigator
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy
 from rclpy.node import Node
 
@@ -31,7 +31,7 @@ import glob
 import time
 import numpy as np
 import math
-
+import copy 
 from random import seed
 from random import randint
 from random import uniform
@@ -171,7 +171,7 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
     # Initialize results
     task_twists = []
     task_poses = []
-    task_results = []
+    task_controller_results = []
 
     cmd_vel_subscriber_node = CmdVelListener()
 
@@ -199,7 +199,8 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
 
             # Update "virtual" pose considering twist 
             pose = SimulateMovement(pose,cmd_vel_subscriber_node.twist_msg,controller_frequency)
-            task_controller_poses.append(pose)
+            pose.header.stamp = odom_node.get_clock().now().to_msg()
+            task_controller_poses.append(copy.deepcopy(pose))
             task_controller_twists.append(cmd_vel_subscriber_node.twist_msg)
 
             # Provide odom to controller for next loop
@@ -219,11 +220,17 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
             odom_to_baselink_tf_msg.transform.translation.z = odom_msg.pose.pose.position.z
             odom_tf_broadcaster.tf_broadcaster.sendTransform(odom_to_baselink_tf_msg)
             # Do something with the feedback
-        task_results.append(navigator.getResult())
+        if (navigator.getResult() == TaskResult.SUCCEEDED):
+            task_controller_results.append(True)
+        elif (navigator.getResult() == TaskResult.FAILED):
+            task_controller_results.append(False)
+        else:
+            print("Unexpected result: \n", navigator.getResult())
+            task_controller_results.append(False)
         task_twists.append(task_controller_twists)
         task_poses.append(task_controller_poses)
     cmd_vel_subscriber_node.destroy_node()
-    return task_results, task_twists, task_poses
+    return task_controller_results, task_twists, task_poses
 
 def main():
     rclpy.init()
@@ -269,7 +276,10 @@ def main():
     side_buffer = 100
     time_stamp = navigator.get_clock().now().to_msg()
     planner_results = []
-    controllers_results = []
+    # Will collect all controller all task data
+    tasks_controller_results = []
+    tasks_controller_twists = []
+    tasks_controller_poses = []
     seed(33)
 
     random_pairs = 1
@@ -293,14 +303,25 @@ def main():
         # Change back map, planner will no more use this. Local costmap uses this map
         # with obstalce info
         navigator.changeMap(map_controller_path)
-        time.sleep(2)  
-        controllers_result = getControllerResults(odom_tf_broadcaster, navigator, result[0], controllers, start, controller_frequency)
-        controllers_results.append(controllers_result)
+        time.sleep(2) 
+        task_controller_results,task_twists,task_poses = getControllerResults(odom_tf_broadcaster, navigator, result[0], controllers, start, controller_frequency)
+        tasks_controller_results.append(task_controller_results)
+        tasks_controller_twists.append(task_twists)
+        tasks_controller_poses.append(task_poses)
         i = i +1
 
     print("Write Results...")
-    with open(os.getcwd() + '/controllers_results.pickle', 'wb+') as f:
-        pickle.dump(controllers_results, f, pickle.HIGHEST_PROTOCOL)
+    with open(os.getcwd() + '/tasks_controller_results.pickle', 'wb+') as f:
+        pickle.dump(tasks_controller_results, f, pickle.HIGHEST_PROTOCOL)
+    
+    with open(os.getcwd() + '/tasks_controller_twists.pickle', 'wb+') as f:
+        pickle.dump(tasks_controller_twists, f, pickle.HIGHEST_PROTOCOL)
+        
+    with open(os.getcwd() + '/tasks_controller_poses.pickle', 'wb+') as f:
+        pickle.dump(tasks_controller_poses, f, pickle.HIGHEST_PROTOCOL)
+
+    with open(os.getcwd() + '/controllers.pickle', 'wb+') as f:
+        pickle.dump(controllers, f, pickle.HIGHEST_PROTOCOL)
 
     with open(os.getcwd() + '/planner_results.pickle', 'wb+') as f:
         pickle.dump(planner_results, f, pickle.HIGHEST_PROTOCOL)
