@@ -26,7 +26,7 @@ def generate_launch_description():
     benchmark_dir = os.getcwd()
     #metrics_py = os.path.join(benchmark_dir, 'metrics.py')
     config = os.path.join(get_package_share_directory('nav2_bringup'), 'params', 'nav2_params.yaml')
-    map_file = os.path.join(benchmark_dir,'25by25_20.yaml')
+    map_file = os.path.join(benchmark_dir,'25by25_empty.yaml')
     lifecycle_nodes = ['map_server', 'planner_server', 'controller_server']
 
     static_transform_one = Node(
@@ -40,7 +40,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{'use_sim_time': True},
+        parameters=[{'use_sim_time': False},
                     {'yaml_filename': map_file},
                     {'topic_name': "map"}])
 
@@ -63,7 +63,7 @@ def generate_launch_description():
         executable='lifecycle_manager',
         name='lifecycle_manager',
         output='screen',
-        parameters=[{'use_sim_time': True},
+        parameters=[{'use_sim_time': False},
                     {'autostart': True},
                     {'node_names': lifecycle_nodes}])
 
@@ -73,6 +73,16 @@ def generate_launch_description():
         launch_arguments={'namespace': '',
                           'use_namespace': 'False'}.items())
 
+    tb3_cmd = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(benchmark_dir, 'tb3_simulation_only.launch.py')),
+        launch_arguments={'namespace': '',
+                          'use_sim_time' : 'False',
+                          'use_rviz' : 'False',
+                          'headless' : 'True', #Will be true
+                          'world' : '',
+                          }.items())
+                          
     #metrics_cmd = ExecuteProcess(
     #    cmd=['python3', '-u', metrics_py],
     #    cwd=[benchmark_dir], output='screen')
@@ -84,5 +94,6 @@ def generate_launch_description():
     ld.add_action(start_controller_server_cmd)
     ld.add_action(start_lifecycle_manager_cmd)
     ld.add_action(rviz_cmd)
+    ld.add_action(tb3_cmd)
     #ld.add_action(metrics_cmd)
     return ld
