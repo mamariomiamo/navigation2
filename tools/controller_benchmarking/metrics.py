@@ -17,6 +17,7 @@
 
 from geometry_msgs.msg import PoseStamped, Twist, TransformStamped
 from nav_msgs.msg import Odometry
+from std_srvs.srv import Empty
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy
 from rclpy.node import Node
@@ -39,24 +40,8 @@ from random import uniform
 from transforms3d.euler import euler2quat, quat2euler
 
 
-def getPlannerResults(odom_tf_broadcaster, navigator, initial_pose, goal_pose, planners):
+def getPlannerResults(navigator, initial_pose, goal_pose, planners):
     results = []
-    odom_tf_broadcaster
-
-    # Publish tf with initialpose (specifically initialpose is not required, could be at origin )
-    odom_to_baselink_tf_msg = TransformStamped()
-    odom_to_baselink_tf_msg.header.frame_id = 'odom'
-    odom_to_baselink_tf_msg.child_frame_id = 'base_link'
-    odom_to_baselink_tf_msg.header.stamp = odom_tf_broadcaster.get_clock().now().to_msg()
-    odom_to_baselink_tf_msg.transform.rotation.x = initial_pose.pose.orientation.x
-    odom_to_baselink_tf_msg.transform.rotation.y = initial_pose.pose.orientation.y
-    odom_to_baselink_tf_msg.transform.rotation.z = initial_pose.pose.orientation.z
-    odom_to_baselink_tf_msg.transform.rotation.w = initial_pose.pose.orientation.w
-    odom_to_baselink_tf_msg.transform.translation.x = initial_pose.pose.position.x
-    odom_to_baselink_tf_msg.transform.translation.y = initial_pose.pose.position.y
-    odom_to_baselink_tf_msg.transform.translation.z = initial_pose.pose.position.z
-    odom_tf_broadcaster.tf_broadcaster.sendTransform(odom_to_baselink_tf_msg)
-
     for planner in planners:
         path = navigator._getPathImpl(initial_pose, goal_pose, planner, use_start=True)
         if path is not None:
@@ -115,30 +100,6 @@ def getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res):
             break
     return goal
 
-def SimulateMovement(pose, twist, frequency):
-    # Basically compute odometry from twist since there's no localization
-
-    _,_,yaw = quat2euler([pose.pose.orientation.w, pose.pose.orientation.x,
-                        pose.pose.orientation.y, pose.pose.orientation.z])
-
-    delta_yaw = twist.angular.z  * 1.0/frequency
-    delta_x = twist.linear.x * math.cos(yaw + delta_yaw) * 1.0/frequency
-    delta_y = twist.linear.x * math.sin(yaw + delta_yaw) * 1.0/frequency
-    pose.pose.position.x += delta_x
-    pose.pose.position.y += delta_y
-
-
-    yaw = yaw + delta_yaw
-    quad = euler2quat(0.0, 0.0, yaw)
-    pose.pose.orientation.w = quad[0]
-    pose.pose.orientation.x = quad[1]
-    pose.pose.orientation.y = quad[2]
-    pose.pose.orientation.z = quad[3]
-    #print("vel x ", twist.linear.x, "vel theta", twist.angular.z)
-    #print("delta x ", delta_x, "delta theta", delta_yaw)
-    #print("pose -> x: ", pose.pose.position.x, "y: ", pose.pose.position.y, "yaw: ", yaw)
-    return pose
-
 class CmdVelListener(Node):
 
     def __init__(self):
@@ -154,38 +115,47 @@ class CmdVelListener(Node):
     def cmd_vel_callback(self, msg):
         self.twist_msg = msg
 
-class OdomPublisher(Node):
+class OdomListener(Node):
 
     def __init__(self):
-        super().__init__('odom_publisher')
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
+        super().__init__('benchmark_odom_node')
+        self.odom_msg = Odometry()
+        self.subscription = self.create_subscription(
+            Odometry,
+            'odom',
+            self.odom_callback,
+            10)
+        self.subscription  # prevent unused variable warning
 
-class OdomBroadcaster(Node):
+    def odom_callback(self, msg):
+        self.odom_msg = msg
+
+class GazeboWorldReset(Node):
 
     def __init__(self):
-        super().__init__('odom_broadcaster')
-        # Initialize the transform broadcaster
-        self.tf_broadcaster = TransformBroadcaster(self)
+        super().__init__('gazebo_world_reset')
+        self.cli = self.create_client(Empty, 'reset_world')
+        
+    def reset_world(self):
+        while not self.cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+        self.req = Empty.Request()
+        self.future = self.cli.call_async(self.req)
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result()
 
-def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose, controller_frequency):
+def getControllerResults(navigator, path, controllers, pose):
     # Initialize results
     task_twists = []
     task_poses = []
     task_controller_results = []
 
     cmd_vel_subscriber_node = CmdVelListener()
-
-    odom_node = OdomPublisher()
-    odom_msg = Odometry()
-    odom_msg.header.frame_id = 'odom'
-    odom_msg.child_frame_id = 'base_link'
-    
-    odom_to_baselink_tf_msg = TransformStamped()
-    odom_to_baselink_tf_msg.header.frame_id = 'odom'
-    odom_to_baselink_tf_msg.child_frame_id = 'base_link'
-    odom_to_baselink_tf_msg.header.stamp = odom_node.get_clock().now().to_msg()
-
+    odom_subscriber_node = OdomListener()
+    gazebo_resetter =  GazeboWorldReset()
+    gazebo_resetter.reset_world()
     for controller in controllers:
+        
         print("Getting controller: ", controller)
         i = 0
         navigator.followPath(path.path)
@@ -196,29 +166,15 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
             # feedback does not provide both linear and angular
             # we get velocities from cmd_vel
             rclpy.spin_once(cmd_vel_subscriber_node)
+            rclpy.spin_once(odom_subscriber_node)
+            
 
             # Update "virtual" pose considering twist 
-            pose = SimulateMovement(pose,cmd_vel_subscriber_node.twist_msg,controller_frequency)
-            pose.header.stamp = odom_node.get_clock().now().to_msg()
+            pose = odom_subscriber_node.odom_msg
+            pose.header.stamp = odom_subscriber_node.get_clock().now().to_msg()
             task_controller_poses.append(copy.deepcopy(pose))
             task_controller_twists.append(cmd_vel_subscriber_node.twist_msg)
-
-            # Provide odom to controller for next loop
-            odom_msg.pose.pose = pose.pose
-            odom_msg.twist.twist = cmd_vel_subscriber_node.twist_msg
-            odom_msg.header.stamp = odom_node.get_clock().now().to_msg()
-            odom_node.odom_pub.publish(odom_msg)
-
-            # Update tf for next loop
-            odom_to_baselink_tf_msg.header.stamp = odom_node.get_clock().now().to_msg()
-            odom_to_baselink_tf_msg.transform.rotation.x = odom_msg.pose.pose.orientation.x
-            odom_to_baselink_tf_msg.transform.rotation.y = odom_msg.pose.pose.orientation.y
-            odom_to_baselink_tf_msg.transform.rotation.z = odom_msg.pose.pose.orientation.z
-            odom_to_baselink_tf_msg.transform.rotation.w = odom_msg.pose.pose.orientation.w
-            odom_to_baselink_tf_msg.transform.translation.x = odom_msg.pose.pose.position.x
-            odom_to_baselink_tf_msg.transform.translation.y = odom_msg.pose.pose.position.y
-            odom_to_baselink_tf_msg.transform.translation.z = odom_msg.pose.pose.position.z
-            odom_tf_broadcaster.tf_broadcaster.sendTransform(odom_to_baselink_tf_msg)
+            
             # Do something with the feedback
         if (navigator.getResult() == TaskResult.SUCCEEDED):
             task_controller_results.append(True)
@@ -229,7 +185,10 @@ def getControllerResults(odom_tf_broadcaster, navigator, path, controllers, pose
             task_controller_results.append(False)
         task_twists.append(task_controller_twists)
         task_poses.append(task_controller_poses)
+        gazebo_resetter.reset_world()
     cmd_vel_subscriber_node.destroy_node()
+    odom_subscriber_node.destroy_node()
+    gazebo_resetter.destroy_node()
     return task_controller_results, task_twists, task_poses
 
 def main():
@@ -239,39 +198,24 @@ def main():
     time.sleep(4)
     navigator = BasicNavigator()
 
-    odom_tf_broadcaster = OdomBroadcaster()
-    odom_to_baselink_tf_msg = TransformStamped()
-    odom_to_baselink_tf_msg.header.frame_id = 'odom'
-    odom_to_baselink_tf_msg.child_frame_id = 'base_link'
-    odom_to_baselink_tf_msg.header.stamp = odom_tf_broadcaster.get_clock().now().to_msg()
-    odom_tf_broadcaster.tf_broadcaster.sendTransform(odom_to_baselink_tf_msg)
-
     # Wait for planner and controller to fully activate
     print("Waiting for planner and controller servers to activate")
     navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
     # Set map to use, other options: 100by100_15, 100by100_10
-    map_controller_path = os.getcwd() + '/' + glob.glob('**/25by25_20_local_costmap.yaml', recursive=True)[0]
-    map_path = os.getcwd() + '/' + glob.glob('**/25by25_20.yaml', recursive=True)[0]
+    map_path = os.getcwd() + '/' + glob.glob('**/25by25_empty.yaml', recursive=True)[0]
 
-    # Set map with ALL obstacles since this is for generating start and end 
-    navigator.changeMap(map_controller_path)
-    time.sleep(2)   
+    navigator.changeMap(map_path)
+    time.sleep(2)  
 
     # Get the costmap for start/goal validation
     costmap_msg = navigator.getGlobalCostmap()
     costmap = np.asarray(costmap_msg.data)
     costmap.resize(costmap_msg.metadata.size_y, costmap_msg.metadata.size_x)
 
-    # Now set real map "obstacle" to benchmark controller are not present here
-    # Planner must use this map
-    navigator.changeMap(map_path)
-    time.sleep(2)  
-
     planners = ['GridBased']
     controllers = ['FollowPath']
 
-    controller_frequency = 20 #Hz
     max_cost = 210
     side_buffer = 100
     time_stamp = navigator.get_clock().now().to_msg()
@@ -282,19 +226,23 @@ def main():
     tasks_controller_poses = []
     seed(33)
 
-    random_pairs = 1
+    random_pairs = 10
     res = costmap_msg.metadata.resolution
     i = 0
     while len(planner_results) != random_pairs:
         print("Cycle: ", i, "out of: ", random_pairs)
-        start = getRandomStart(costmap, max_cost, side_buffer, time_stamp, res)
+        #start = getRandomStart(costmap, max_cost, side_buffer, time_stamp, res)
+        start = PoseStamped()
+        start.header.frame_id = 'map'
+        start.header.stamp = time_stamp
+        start.pose.position.x = 1.0
+        start.pose.position.y = 1.0
         goal = getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res)
 
         print("Start", start)
         print("Goal", goal)
-        navigator.changeMap(map_path)
         time.sleep(2)  
-        result = getPlannerResults(odom_tf_broadcaster, navigator, start, goal, planners)
+        result = getPlannerResults(navigator, start, goal, planners)
         if len(result) == len(planners):
             planner_results.append(result)
         else:
@@ -302,9 +250,7 @@ def main():
             continue
         # Change back map, planner will no more use this. Local costmap uses this map
         # with obstalce info
-        navigator.changeMap(map_controller_path)
-        time.sleep(2) 
-        task_controller_results,task_twists,task_poses = getControllerResults(odom_tf_broadcaster, navigator, result[0], controllers, start, controller_frequency)
+        task_controller_results,task_twists,task_poses = getControllerResults(navigator, result[0], controllers, start)
         tasks_controller_results.append(task_controller_results)
         tasks_controller_twists.append(task_twists)
         tasks_controller_poses.append(task_poses)
