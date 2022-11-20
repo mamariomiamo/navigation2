@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from geometry_msgs.msg import PoseStamped, Twist, TransformStamped
+from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Empty
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -149,6 +149,7 @@ def getControllerResults(navigator, path, controllers, pose):
     task_twists = []
     task_poses = []
     task_controller_results = []
+    task_local_costmaps = []
 
     cmd_vel_subscriber_node = CmdVelListener()
     odom_subscriber_node = OdomListener()
@@ -161,19 +162,28 @@ def getControllerResults(navigator, path, controllers, pose):
         navigator.followPath(path.path)
         task_controller_twists = []
         task_controller_poses = []
-
+        task_controller_local_costmaps = []
+        
         while not navigator.isTaskComplete():
             # feedback does not provide both linear and angular
             # we get velocities from cmd_vel
             rclpy.spin_once(cmd_vel_subscriber_node)
             rclpy.spin_once(odom_subscriber_node)
-            
+            # Get the local costmap for future metrics
+            costmap_msg = navigator.getLocalCostmap()
+            costmap = np.asarray(costmap_msg.data)
+            costmap.resize(costmap_msg.metadata.size_y, costmap_msg.metadata.size_x)
 
             # Update "virtual" pose considering twist 
-            pose = odom_subscriber_node.odom_msg
+            pose = PoseStamped()
+            pose.pose = odom_subscriber_node.odom_msg.pose.pose
             pose.header.stamp = odom_subscriber_node.get_clock().now().to_msg()
             task_controller_poses.append(copy.deepcopy(pose))
-            task_controller_twists.append(cmd_vel_subscriber_node.twist_msg)
+            twist_stamped = TwistStamped()
+            twist_stamped.header.stamp = cmd_vel_subscriber_node.get_clock().now().to_msg()
+            twist_stamped.twist = cmd_vel_subscriber_node.twist_msg
+            task_controller_twists.append(twist_stamped)
+            task_controller_local_costmaps.append(costmap)
             
             # Do something with the feedback
         if (navigator.getResult() == TaskResult.SUCCEEDED):
@@ -185,11 +195,12 @@ def getControllerResults(navigator, path, controllers, pose):
             task_controller_results.append(False)
         task_twists.append(task_controller_twists)
         task_poses.append(task_controller_poses)
+        task_local_costmaps.append(task_controller_local_costmaps)
         gazebo_resetter.reset_world()
     cmd_vel_subscriber_node.destroy_node()
     odom_subscriber_node.destroy_node()
     gazebo_resetter.destroy_node()
-    return task_controller_results, task_twists, task_poses
+    return task_controller_results, task_twists, task_poses, task_local_costmaps
 
 def main():
     rclpy.init()
@@ -213,6 +224,9 @@ def main():
     costmap = np.asarray(costmap_msg.data)
     costmap.resize(costmap_msg.metadata.size_y, costmap_msg.metadata.size_x)
 
+    local_costmap_msg = navigator.getLocalCostmap()
+    local_costmap_resolution = local_costmap_msg.metadata.resolution
+
     planners = ['GridBased']
     controllers = ['FollowPath']
 
@@ -224,9 +238,11 @@ def main():
     tasks_controller_results = []
     tasks_controller_twists = []
     tasks_controller_poses = []
+    # List with  local costamap of each controller for each task
+    tasks_controller_local_costmaps = []
     seed(33)
 
-    random_pairs = 10
+    random_pairs = 1
     res = costmap_msg.metadata.resolution
     i = 0
     while len(planner_results) != random_pairs:
@@ -250,10 +266,11 @@ def main():
             continue
         # Change back map, planner will no more use this. Local costmap uses this map
         # with obstalce info
-        task_controller_results,task_twists,task_poses = getControllerResults(navigator, result[0], controllers, start)
+        task_controller_results,task_twists,task_poses, task_local_costmaps = getControllerResults(navigator, result[0], controllers, start)
         tasks_controller_results.append(task_controller_results)
         tasks_controller_twists.append(task_twists)
         tasks_controller_poses.append(task_poses)
+        tasks_controller_local_costmaps.append(task_local_costmaps)
         i = i +1
 
     print("Write Results...")
@@ -268,6 +285,12 @@ def main():
 
     with open(os.getcwd() + '/controllers.pickle', 'wb+') as f:
         pickle.dump(controllers, f, pickle.HIGHEST_PROTOCOL)
+
+    with open(os.getcwd() + '/local_costmaps.pickle', 'wb+') as f:
+        pickle.dump(tasks_controller_local_costmaps, f, pickle.HIGHEST_PROTOCOL)
+        
+    with open(os.getcwd() + '/local_costmap_resolution.pickle', 'wb+') as f:
+        pickle.dump(local_costmap_resolution, f, pickle.HIGHEST_PROTOCOL)
 
     with open(os.getcwd() + '/planner_results.pickle', 'wb+') as f:
         pickle.dump(planner_results, f, pickle.HIGHEST_PROTOCOL)
