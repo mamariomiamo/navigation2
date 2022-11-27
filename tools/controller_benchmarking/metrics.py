@@ -43,6 +43,7 @@ from transforms3d.euler import euler2quat, quat2euler
 def getPlannerResults(navigator, initial_pose, goal_pose, planners):
     results = []
     for planner in planners:
+        navigator.clearGlobalCostmap()
         path = navigator._getPathImpl(initial_pose, goal_pose, planner, use_start=True)
         if path is not None:
             results.append(path)
@@ -159,11 +160,15 @@ def getControllerResults(navigator, path, controllers, pose):
         
         print("Getting controller: ", controller)
         i = 0
-        navigator.followPath(path.path)
+        navigator.clearLocalCostmap()
+        navigator.followPath(path.path, controller_id=controller)
         task_controller_twists = []
         task_controller_poses = []
         task_controller_local_costmaps = []
-        
+        # Sping once at the beginning. Actually useful for
+        # future loops. 
+        rclpy.spin_once(cmd_vel_subscriber_node)
+        rclpy.spin_once(odom_subscriber_node)
         while not navigator.isTaskComplete():
             # feedback does not provide both linear and angular
             # we get velocities from cmd_vel
@@ -228,7 +233,7 @@ def main():
     local_costmap_resolution = local_costmap_msg.metadata.resolution
 
     planners = ['GridBased']
-    controllers = ['FollowPath']
+    controllers = ["DWB_benchmark","RPP_benchmark"]
 
     max_cost = 210
     side_buffer = 100
@@ -242,7 +247,7 @@ def main():
     tasks_controller_local_costmaps = []
     seed(33)
 
-    random_pairs = 1
+    random_pairs = 2
     res = costmap_msg.metadata.resolution
     i = 0
     while len(planner_results) != random_pairs:
