@@ -31,15 +31,12 @@ def getPaths(results):
             paths.append(path.path)
     return paths
 
-def getTaskAvgLinearSpeed(tasks_twists):
-    averages_linear_x = []
-    for task_twists in tasks_twists:
-        for controller_twists in task_twists:
-            linear_x = []
-            for twist_stamped in controller_twists:
-                linear_x.append(twist_stamped.twist.linear.x)
-            averages_linear_x.append(np.average(linear_x))
-    return averages_linear_x
+
+def getTaskAvgLinearSpeed(controller_twists):
+    linear_x = []
+    for twist_stamped in controller_twists:
+        linear_x.append(twist_stamped.twist.linear.x)
+    return  np.average(linear_x)
 
 def getControllerPath(tasks_poses):
     controller_paths = []
@@ -83,47 +80,38 @@ def getObstacleDistances(tasks_local_costmaps, local_costmap_resolution):
             controller_obstacle_distances.append(min_obst_dist)
     return controller_obstacle_distances
 
-def getControllerMSJerks(tasks_twists):
-    linear_ms_jerks = []
-    angular_ms_jerks = []
-    for task_twists in tasks_twists:
-        for controller_twists in task_twists:
-            linear_x = []
-            angular_z = []
-            time_passed = 0.0
-            for twist_stamped in controller_twists:
-                linear_x.append(twist_stamped.twist.linear.x)
-                angular_z.append(twist_stamped.twist.angular.z)
-                time_passed+=twist_stamped.header.stamp.nanosec/1e09+twist_stamped.header.stamp.sec
-            end = controller_twists[-1].header.stamp.nanosec/1e09+controller_twists[-1].header.stamp.sec
-            start= controller_twists[0].header.stamp.nanosec/1e09+controller_twists[0].header.stamp.sec
-            dt = (end -start)/len(controller_twists)
-            print(dt)
-            linear_acceleration_x = np.gradient(linear_x, dt)
-            angular_acceleration_z = np.gradient(angular_z, dt)
-            linear_jerk_x = np.gradient(linear_acceleration_x, dt)
-            angular_jerk_z = np.gradient(angular_acceleration_z, dt)
-            # Mean Squared jerk Wininger, Kim, & Craelius (2009) 
-            ms_linear_jerk_x = 0
-            for jerk in linear_jerk_x:
-                ms_linear_jerk_x += jerk**2
-            linear_ms_jerks.append(ms_linear_jerk_x)
-            ms_angular_jerk_x = 0
-            for jerk in angular_jerk_z:
-                ms_angular_jerk_x += jerk**2
-            angular_ms_jerks.append(ms_angular_jerk_x)
-    return   linear_ms_jerks,angular_ms_jerks
+def getControllerMSJerks(controller_twists):
+    linear_x = []
+    angular_z = []
+    time_passed = 0.0
+    for twist_stamped in controller_twists:
+        linear_x.append(twist_stamped.twist.linear.x)
+        angular_z.append(twist_stamped.twist.angular.z)
+        time_passed+=twist_stamped.header.stamp.nanosec/1e09+twist_stamped.header.stamp.sec
+    end = controller_twists[-1].header.stamp.nanosec/1e09+controller_twists[-1].header.stamp.sec
+    start= controller_twists[0].header.stamp.nanosec/1e09+controller_twists[0].header.stamp.sec
+    dt = (end -start)/len(controller_twists)
+    print(dt)
+    linear_acceleration_x = np.gradient(linear_x, dt)
+    angular_acceleration_z = np.gradient(angular_z, dt)
+    linear_jerk_x = np.gradient(linear_acceleration_x, dt)
+    angular_jerk_z = np.gradient(angular_acceleration_z, dt)
+    # Mean Squared jerk Wininger, Kim, & Craelius (2009) 
+    ms_linear_jerk_x = 0
+    for jerk in linear_jerk_x:
+        ms_linear_jerk_x += jerk**2
+    ms_angular_jerk_x = 0
+    for jerk in angular_jerk_z:
+        ms_angular_jerk_x += jerk**2
+    return ms_linear_jerk_x,ms_angular_jerk_x
             
-def getTaskTimes(tasks_poses):
-    controller_task_times = []
-    for task_poses in tasks_poses:
-        for controller_poses in task_poses:
-            controller_task_times.append(
-                (controller_poses[-1].header.stamp.nanosec/1e09+controller_poses[-1].header.stamp.sec)
-                -(controller_poses[0].header.stamp.nanosec/1e09+controller_poses[0].header.stamp.sec))
-    return controller_task_times
+def getTaskTimes(controller_poses):
+
+    return  (controller_poses[-1].header.stamp.nanosec/1e09+controller_poses[-1].header.stamp.sec)-\
+            (controller_poses[0].header.stamp.nanosec/1e09+controller_poses[0].header.stamp.sec)
 
 def getPathLength(path):
+    print(len(path.poses))
     path_length = 0
     x_prev = path.poses[0].pose.position.x
     y_prev = path.poses[0].pose.position.y
@@ -161,7 +149,12 @@ def main():
         planner_results = pickle.load(f)
 
     # Compute metrics
-    
+    print(tasks_results)
+    #
+    flat_tasks_results = []
+    for results in tasks_results:
+        flat_tasks_results+=results
+    print(flat_tasks_results)
     # Planner path lenght
     paths = getPaths(planner_results)
     path_lengths = []
@@ -169,27 +162,50 @@ def main():
     for path in paths:
         path_lengths.append(getPathLength(path))
     path_lengths = np.asarray(path_lengths)
-    total_paths = len(paths)
+    #total_paths = len(paths)
 
     #speeds = getSpeeds(task_twists)
+
+        
     
     # Linear Speed
-    speeds_x = getTaskAvgLinearSpeed(tasks_twists)
+    # Contains all twists, flat 
+    controllers_twists = []
+    for task_twists in tasks_twists:
+        for controller_twists in task_twists:
+            controllers_twists.append(controller_twists)
+    speeds_x = []
+    for controller_twists,success in zip(controllers_twists, flat_tasks_results):
+        print("success ",success)
+        print(len(controller_twists))
+        if success:
+            speeds_x.append(getTaskAvgLinearSpeed(controller_twists))
+        else:
+            speeds_x.append(np.nan)
+    total_paths = len(speeds_x)
+    
+    print("speeds_x ",speeds_x)
     speeds_x = np.asarray(speeds_x)
     speeds_x.resize((int(total_paths/len(controllers)), len(controllers)))
     speeds_x = np.transpose(speeds_x)
+    speeds_x = speeds_x[np.isfinite(speeds_x)]
     
     # Controllet path lenght
     controller_paths = getControllerPath(tasks_poses)
     controller_paths_lenght = []
-    for controller_path in controller_paths:
-        controller_paths_lenght.append(getPathLength(controller_path))
+    for controller_path,success in zip(controller_paths, flat_tasks_results):
+        print(success)
+        if success:
+            controller_paths_lenght.append(getPathLength(controller_path))
+        else:
+            controller_paths_lenght.append(np.nan)
     controller_paths_lenght = np.asarray(controller_paths_lenght)
     controller_paths_lenght.resize((int(total_paths/len(controllers)), len(controllers)))
     controller_paths_lenght = np.transpose(controller_paths_lenght)
-    
+    controller_paths_lenght = controller_paths_lenght[np.isfinite(controller_paths_lenght)]
     # Distance from obstacles
     
+    # TODO take into account failed navigations (no error is produced) 
     # Minimum distance
     controller_obstacles_distances = getObstacleDistances(tasks_controller_local_costmaps, local_costmap_resolution)
     controller_obstacles_distances = np.asarray(controller_obstacles_distances)
@@ -197,17 +213,48 @@ def main():
     controller_obstacles_distances = np.transpose(controller_obstacles_distances)
     
     # Smoothness
-    
-    controller_ME_linear_jerk,controller_ME_angular_jerk = getControllerMSJerks(tasks_twists)
-    
+    controller_ME_linear_jerk = []
+    controller_ME_angular_jerk = []
+    for controller_twists,success in zip(controllers_twists, flat_tasks_results):
+        print("success ",success)
+        print(len(controller_twists))
+        if success:
+            me_linear_jerk, me_anngular_jerk = getControllerMSJerks(controller_twists)
+            controller_ME_linear_jerk.append(me_linear_jerk)
+            controller_ME_angular_jerk.append(me_anngular_jerk)
+        else:
+            controller_ME_linear_jerk.append(np.nan)
+            controller_ME_angular_jerk.append(np.nan)
+        
     controller_ME_linear_jerk = np.asarray(controller_ME_linear_jerk)
     controller_ME_linear_jerk.resize((int(total_paths/len(controllers)), len(controllers)))
     controller_ME_linear_jerk = np.transpose(controller_ME_linear_jerk)
+    controller_ME_linear_jerk = controller_ME_linear_jerk[np.isfinite(controller_ME_linear_jerk)]
     
     controller_ME_angular_jerk = np.asarray(controller_ME_angular_jerk)
     controller_ME_angular_jerk.resize((int(total_paths/len(controllers)), len(controllers)))
     controller_ME_angular_jerk = np.transpose(controller_ME_angular_jerk)
-    
+    controller_ME_angular_jerk = controller_ME_angular_jerk[np.isfinite(controller_ME_angular_jerk)]  
+
+    # Single axis array
+    flat_poses = []
+    for task_poses in tasks_poses:
+        for controller_poses in task_poses:
+            flat_poses.append(controller_poses)
+            
+    task_times = []        
+    for controller_poses,success in zip(flat_poses, flat_tasks_results):
+        print("success ",success)
+        print(len(controller_poses))
+        if success:
+            task_times.append(getTaskTimes(controller_poses))
+        else:
+            task_times.append(np.nan)
+    task_times = np.asarray(task_times)
+    task_times.resize((int(total_paths/len(controllers)), len(controllers)))
+    task_times = np.transpose(task_times)
+    # Remove np.nan
+    task_times = task_times[np.isfinite(task_times)]    
     # Generate table
     planner_table = [['Controller',
                       'Success'+
@@ -224,10 +271,6 @@ def main():
                       'Avg integrated z jerk' +
                       '\n(m/s^6)']]
 
-    task_times = getTaskTimes(tasks_poses)
-    task_times = np.asarray(task_times)
-    task_times.resize((int(total_paths/len(controllers)), len(controllers)))
-    task_times = np.transpose(task_times)
     
     for i in range(0, len(controllers)):
         planner_table.append([controllers[i],
