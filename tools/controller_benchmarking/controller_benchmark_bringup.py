@@ -26,6 +26,7 @@ def generate_launch_description():
     benchmark_dir = os.getcwd()
     #metrics_py = os.path.join(benchmark_dir, 'metrics.py')
     config = os.path.join(get_package_share_directory('nav2_bringup'), 'params', 'nav2_params.yaml')
+    benchmark_config = os.path.join(benchmark_dir, 'controller_benchmark.yaml')
     map_file = os.path.join(benchmark_dir,'25by25_empty.yaml')
     lifecycle_nodes = ['map_server', 'planner_server', 'controller_server']
 
@@ -56,7 +57,7 @@ def generate_launch_description():
         executable='controller_server',
         name='controller_server',
         output='screen',
-        parameters=[config])
+        parameters=[config,benchmark_config], )
 
     start_lifecycle_manager_cmd = Node(
         package='nav2_lifecycle_manager',
@@ -79,7 +80,7 @@ def generate_launch_description():
         launch_arguments={'namespace': '',
                           'use_sim_time' : 'False',
                           'use_rviz' : 'False',
-                          'headless' : 'True', #Will be true
+                          'headless' : 'False', #Will be true
                           'world' : '',
                           }.items())
                           
