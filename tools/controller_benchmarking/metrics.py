@@ -219,7 +219,7 @@ def main():
     navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
     # Set map to use, other options: 100by100_15, 100by100_10
-    map_path = os.getcwd() + '/' + glob.glob('**/25by25_empty.yaml', recursive=True)[0]
+    map_path = os.getcwd() + '/' + glob.glob('**/maps/25by25_empty.yaml', recursive=True)[0]
 
     navigator.changeMap(map_path)
     time.sleep(2)  
