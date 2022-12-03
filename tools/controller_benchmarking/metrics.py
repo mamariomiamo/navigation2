@@ -36,7 +36,7 @@ import copy
 from random import seed
 from random import randint
 from random import uniform
-
+from threading import Thread
 from transforms3d.euler import euler2quat, quat2euler
 
 
@@ -77,9 +77,8 @@ def getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res):
     goal.header.frame_id = 'map'
     goal.header.stamp = time_stamp
     while True:
-        row = randint(side_buffer, costmap.shape[0]-side_buffer)
-        col = randint(side_buffer, costmap.shape[1]-side_buffer)
-
+        row = randint(side_buffer, costmap.shape[0]-side_buffer) - int(costmap.shape[0]/2)
+        col = randint(side_buffer, costmap.shape[1]-side_buffer) - int(costmap.shape[1]/2)
         start_x = start.pose.position.x
         start_y = start.pose.position.y
         goal_x = col*res
@@ -87,7 +86,6 @@ def getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res):
         x_diff = goal_x - start_x
         y_diff = goal_y - start_y
         dist = math.sqrt(x_diff ** 2 + y_diff ** 2)
-
         if costmap[row, col] < max_cost and dist > 3.0:
             goal.pose.position.x = goal_x
             goal.pose.position.y = goal_y
@@ -145,19 +143,44 @@ class GazeboWorldReset(Node):
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
 
-def getControllerResults(navigator, path, controllers, pose):
+def spin_executor(executor):
+     try:
+          executor.spin()
+     except rclpy.executors.ExternalShutdownException:
+          pass
+
+
+def getControllerResults(navigator, path, controllers, start_pose):
     # Initialize results
     task_twists = []
     task_poses = []
     task_controller_results = []
     task_local_costmaps = []
-
+    
     cmd_vel_subscriber_node = CmdVelListener()
     odom_subscriber_node = OdomListener()
     gazebo_resetter =  GazeboWorldReset()
+    sub_executor = rclpy.executors.MultiThreadedExecutor()
+    sub_executor.add_node(cmd_vel_subscriber_node)
+    sub_executor.add_node(odom_subscriber_node)
+    sub_executor.add_node(gazebo_resetter)
+    sub_thread = Thread(target=spin_executor, args=(sub_executor, ), daemon=True)
+    sub_thread.start()
+    # Wait for clock to be received
+    time.sleep(0.3)
+
+    after_reset_pose = odom_subscriber_node.odom_msg.pose.pose
     gazebo_resetter.reset_world()
+    after_reset_pose = odom_subscriber_node.odom_msg.pose.pose
+    # Since /reset_world service has not boolen result, hand check world has been reset...
+    while (abs(start_pose.pose.position.x - after_reset_pose.position.x) > 0.01 and
+          abs(start_pose.pose.position.y - after_reset_pose.position.y) > 0.01):
+        print("Resetting again world...")
+        gazebo_resetter.reset_world()
+        after_reset_pose = odom_subscriber_node.odom_msg.pose.pose
+        time.sleep(0.5)
     for controller in controllers:
-        
+
         print("Getting controller: ", controller)
         i = 0
         navigator.clearLocalCostmap()
@@ -165,31 +188,26 @@ def getControllerResults(navigator, path, controllers, pose):
         task_controller_twists = []
         task_controller_poses = []
         task_controller_local_costmaps = []
-        # Sping once at the beginning. Actually useful for
-        # future loops. 
-        rclpy.spin_once(cmd_vel_subscriber_node)
-        rclpy.spin_once(odom_subscriber_node)
         while not navigator.isTaskComplete():
             # feedback does not provide both linear and angular
             # we get velocities from cmd_vel
-            rclpy.spin_once(cmd_vel_subscriber_node)
-            rclpy.spin_once(odom_subscriber_node)
-            # Get the local costmap for future metrics
-            costmap_msg = navigator.getLocalCostmap()
-            costmap = np.asarray(costmap_msg.data)
-            costmap.resize(costmap_msg.metadata.size_y, costmap_msg.metadata.size_x)
-
+                        
             # Update "virtual" pose considering twist 
             pose = PoseStamped()
             pose.pose = odom_subscriber_node.odom_msg.pose.pose
             pose.header.stamp = odom_subscriber_node.get_clock().now().to_msg()
             task_controller_poses.append(copy.deepcopy(pose))
+            
+            # Get the local costmap for future metrics
+            costmap_msg = navigator.getLocalCostmap()
+            costmap = np.asarray(costmap_msg.data)
+            costmap.resize(costmap_msg.metadata.size_y, costmap_msg.metadata.size_x)
+
             twist_stamped = TwistStamped()
             twist_stamped.header.stamp = cmd_vel_subscriber_node.get_clock().now().to_msg()
             twist_stamped.twist = cmd_vel_subscriber_node.twist_msg
             task_controller_twists.append(twist_stamped)
             task_controller_local_costmaps.append(costmap)
-            
             # Do something with the feedback
         if (navigator.getResult() == TaskResult.SUCCEEDED):
             task_controller_results.append(True)
@@ -202,16 +220,19 @@ def getControllerResults(navigator, path, controllers, pose):
         task_poses.append(task_controller_poses)
         task_local_costmaps.append(task_controller_local_costmaps)
         gazebo_resetter.reset_world()
+    print("Cleaning resources ...")
     cmd_vel_subscriber_node.destroy_node()
     odom_subscriber_node.destroy_node()
     gazebo_resetter.destroy_node()
+    sub_executor.shutdown()
+    sub_thread.join()
+    print("Thread joint")
     return task_controller_results, task_twists, task_poses, task_local_costmaps
 
 def main():
     rclpy.init()
 
-    # A sleep for ensuring the Nav2 part is up, before senfing the tf
-    time.sleep(4)
+
     navigator = BasicNavigator()
 
     # Wait for planner and controller to fully activate
@@ -219,7 +240,7 @@ def main():
     navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
     # Set map to use, other options: 100by100_15, 100by100_10
-    map_path = os.getcwd() + '/' + glob.glob('**/maps/25by25_empty.yaml', recursive=True)[0]
+    map_path = os.getcwd() + '/' + glob.glob('**/maps/10by10_empty.yaml', recursive=True)[0]
 
     navigator.changeMap(map_path)
     time.sleep(2)  
@@ -236,8 +257,9 @@ def main():
     controllers = ["DWB_benchmark","RPP_benchmark"]
 
     max_cost = 210
-    side_buffer = 100
-    time_stamp = navigator.get_clock().now().to_msg()
+    side_buffer = 20
+    time_stamp = navigator.get_clock().now().to_msg()    
+    
     planner_results = []
     # Will collect all controller all task data
     tasks_controller_results = []
@@ -247,7 +269,7 @@ def main():
     tasks_controller_local_costmaps = []
     seed(33)
 
-    random_pairs = 2
+    random_pairs = 4
     res = costmap_msg.metadata.resolution
     i = 0
     while len(planner_results) != random_pairs:
@@ -259,9 +281,8 @@ def main():
         start.pose.position.x = 1.0
         start.pose.position.y = 1.0
         goal = getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res)
-
-        print("Start", start)
-        print("Goal", goal)
+        #print("Start", start)
+        #print("Goal", goal)
         time.sleep(2)  
         result = getPlannerResults(navigator, start, goal, planners)
         if len(result) == len(planners):
