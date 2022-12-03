@@ -22,9 +22,6 @@ from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy
 from rclpy.node import Node
 
-from tf2_ros import TransformBroadcaster
-from ament_index_python.packages import get_package_share_directory
-
 import math
 import os
 import pickle
@@ -37,7 +34,7 @@ from random import seed
 from random import randint
 from random import uniform
 from threading import Thread
-from transforms3d.euler import euler2quat, quat2euler
+from transforms3d.euler import euler2quat
 
 
 def getPlannerResults(navigator, initial_pose, goal_pose, planners):
