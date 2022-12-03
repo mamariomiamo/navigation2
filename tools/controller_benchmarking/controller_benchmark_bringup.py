@@ -27,13 +27,14 @@ def generate_launch_description():
     #metrics_py = os.path.join(benchmark_dir, 'metrics.py')
     config = os.path.join(get_package_share_directory('nav2_bringup'), 'params', 'nav2_params.yaml')
     benchmark_config = os.path.join(benchmark_dir, 'controller_benchmark.yaml')
-    map_file = os.path.join(benchmark_dir,'maps/25by25_empty.yaml')
+    map_file = os.path.join(benchmark_dir,'maps/10by10_empty.yaml')
     lifecycle_nodes = ['map_server', 'planner_server', 'controller_server']
 
     static_transform_one = Node(
          package = 'tf2_ros',
          executable = 'static_transform_publisher',
          output = 'screen',
+         parameters=[{'use_sim_time': True}],
          arguments = ["0", "0", "0", "0", "0", "0", "odom", "map"])
 
     start_map_server_cmd = Node(
@@ -41,7 +42,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{'use_sim_time': False},
+        parameters=[{'use_sim_time': True},
                     {'yaml_filename': map_file},
                     {'topic_name': "map"}])
 
@@ -50,21 +51,23 @@ def generate_launch_description():
         executable='planner_server',
         name='planner_server',
         output='screen',
-        parameters=[config])
+        parameters=[config,
+                    {'use_sim_time': True}])
 
     start_controller_server_cmd = Node(
         package='nav2_controller',
         executable='controller_server',
         name='controller_server',
         output='screen',
-        parameters=[config,benchmark_config], )
+        parameters=[config,benchmark_config,
+                    {'use_sim_time': True}], )
 
     start_lifecycle_manager_cmd = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
         name='lifecycle_manager',
         output='screen',
-        parameters=[{'use_sim_time': False},
+        parameters=[{'use_sim_time': True},
                     {'autostart': True},
                     {'node_names': lifecycle_nodes}])
 
@@ -72,13 +75,14 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(nav2_bringup_dir, 'launch', 'rviz_launch.py')),
         launch_arguments={'namespace': '',
+                          'ues_sim_time' : 'True',
                           'use_namespace': 'False'}.items())
 
     tb3_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(benchmark_dir, 'tb3_simulation_only.launch.py')),
         launch_arguments={'namespace': '',
-                          'use_sim_time' : 'False',
+                          'use_sim_time' : 'True',
                           'use_rviz' : 'False',
                           'headless' : 'False', #Will be true
                           'world' : '',
