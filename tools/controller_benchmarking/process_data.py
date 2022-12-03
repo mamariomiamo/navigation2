@@ -91,7 +91,7 @@ def getControllerMSJerks(controller_twists):
     end = controller_twists[-1].header.stamp.nanosec/1e09+controller_twists[-1].header.stamp.sec
     start= controller_twists[0].header.stamp.nanosec/1e09+controller_twists[0].header.stamp.sec
     dt = (end -start)/len(controller_twists)
-    print(dt)
+    #print(dt)
     linear_acceleration_x = np.gradient(linear_x, dt)
     angular_acceleration_z = np.gradient(angular_z, dt)
     linear_jerk_x = np.gradient(linear_acceleration_x, dt)
@@ -111,7 +111,7 @@ def getTaskTimes(controller_poses):
             (controller_poses[0].header.stamp.nanosec/1e09+controller_poses[0].header.stamp.sec)
 
 def getPathLength(path):
-    print(len(path.poses))
+    #print(len(path.poses))
     path_length = 0
     x_prev = path.poses[0].pose.position.x
     y_prev = path.poses[0].pose.position.y
@@ -122,6 +122,16 @@ def getPathLength(path):
         x_prev = x_curr
         y_prev = y_curr
     return path_length
+
+def refactorArray(flat_array : list, n_paths : int, n_controllers : int) -> np.array:
+    flat_array = np.asarray(flat_array)
+    flat_array = flat_array[np.isfinite(flat_array)]
+    flat_array.resize((int(n_paths/n_controllers), n_controllers))
+    flat_array = np.transpose(flat_array)
+    # Remove np.nan
+    for controller_index in range(len(flat_array)):
+        flat_array[controller_index] = (flat_array[controller_index])[np.isfinite(flat_array[controller_index])]
+    return flat_array
 
 def main():
 
@@ -149,12 +159,11 @@ def main():
         planner_results = pickle.load(f)
 
     # Compute metrics
-    print(tasks_results)
+
     #
     flat_tasks_results = []
     for results in tasks_results:
         flat_tasks_results+=results
-    print(flat_tasks_results)
     # Planner path lenght
     paths = getPaths(planner_results)
     path_lengths = []
@@ -176,65 +185,53 @@ def main():
             controllers_twists.append(controller_twists)
     speeds_x = []
     for controller_twists,success in zip(controllers_twists, flat_tasks_results):
-        print("success ",success)
-        print(len(controller_twists))
+        #print("success ",success)
+        #print(len(controller_twists))
         if success:
             speeds_x.append(getTaskAvgLinearSpeed(controller_twists))
         else:
             speeds_x.append(np.nan)
     total_paths = len(speeds_x)
     
-    print("speeds_x ",speeds_x)
-    speeds_x = np.asarray(speeds_x)
-    speeds_x.resize((int(total_paths/len(controllers)), len(controllers)))
-    speeds_x = np.transpose(speeds_x)
-    speeds_x = speeds_x[np.isfinite(speeds_x)]
+    speeds_x = refactorArray(speeds_x,total_paths, len(controllers))
     
     # Controllet path lenght
+    #for task_pose in tasks_poses:
+    #    print(list(map(len,task_pose)))
+    #print(tasks_poses[1][1])
     controller_paths = getControllerPath(tasks_poses)
     controller_paths_lenght = []
     for controller_path,success in zip(controller_paths, flat_tasks_results):
-        print(success)
+        #print(success)
+        #print("controller_path " ,controller_path)
         if success:
             controller_paths_lenght.append(getPathLength(controller_path))
         else:
             controller_paths_lenght.append(np.nan)
-    controller_paths_lenght = np.asarray(controller_paths_lenght)
-    controller_paths_lenght.resize((int(total_paths/len(controllers)), len(controllers)))
-    controller_paths_lenght = np.transpose(controller_paths_lenght)
-    controller_paths_lenght = controller_paths_lenght[np.isfinite(controller_paths_lenght)]
+    controller_paths_lenght = refactorArray(controller_paths_lenght,total_paths, len(controllers))
     # Distance from obstacles
     
     # TODO take into account failed navigations (no error is produced) 
     # Minimum distance
     controller_obstacles_distances = getObstacleDistances(tasks_controller_local_costmaps, local_costmap_resolution)
-    controller_obstacles_distances = np.asarray(controller_obstacles_distances)
-    controller_obstacles_distances.resize((int(total_paths/len(controllers)), len(controllers)))
-    controller_obstacles_distances = np.transpose(controller_obstacles_distances)
+    controller_obstacles_distances = refactorArray(controller_obstacles_distances,total_paths, len(controllers))
     
     # Smoothness
     controller_ME_linear_jerk = []
     controller_ME_angular_jerk = []
     for controller_twists,success in zip(controllers_twists, flat_tasks_results):
-        print("success ",success)
-        print(len(controller_twists))
+        #print("success ",success)
+        #print(len(controller_twists))
         if success:
-            me_linear_jerk, me_anngular_jerk = getControllerMSJerks(controller_twists)
+            me_linear_jerk, me_angular_jerk = getControllerMSJerks(controller_twists)
             controller_ME_linear_jerk.append(me_linear_jerk)
-            controller_ME_angular_jerk.append(me_anngular_jerk)
+            controller_ME_angular_jerk.append(me_angular_jerk)
         else:
             controller_ME_linear_jerk.append(np.nan)
             controller_ME_angular_jerk.append(np.nan)
         
-    controller_ME_linear_jerk = np.asarray(controller_ME_linear_jerk)
-    controller_ME_linear_jerk.resize((int(total_paths/len(controllers)), len(controllers)))
-    controller_ME_linear_jerk = np.transpose(controller_ME_linear_jerk)
-    controller_ME_linear_jerk = controller_ME_linear_jerk[np.isfinite(controller_ME_linear_jerk)]
-    
-    controller_ME_angular_jerk = np.asarray(controller_ME_angular_jerk)
-    controller_ME_angular_jerk.resize((int(total_paths/len(controllers)), len(controllers)))
-    controller_ME_angular_jerk = np.transpose(controller_ME_angular_jerk)
-    controller_ME_angular_jerk = controller_ME_angular_jerk[np.isfinite(controller_ME_angular_jerk)]  
+    controller_ME_linear_jerk = refactorArray(controller_ME_linear_jerk,total_paths, len(controllers))
+    controller_ME_angular_jerk = refactorArray(controller_ME_angular_jerk,total_paths, len(controllers))
 
     # Single axis array
     flat_poses = []
@@ -244,15 +241,13 @@ def main():
             
     task_times = []        
     for controller_poses,success in zip(flat_poses, flat_tasks_results):
-        print("success ",success)
-        print(len(controller_poses))
+        #print("success ",success)
+        #print(len(controller_poses))
         if success:
             task_times.append(getTaskTimes(controller_poses))
         else:
             task_times.append(np.nan)
-    task_times = np.asarray(task_times)
-    task_times.resize((int(total_paths/len(controllers)), len(controllers)))
-    task_times = np.transpose(task_times)
+    task_times = refactorArray(task_times,total_paths, len(controllers))
     # Remove np.nan
     task_times = task_times[np.isfinite(task_times)]    
     # Generate table
@@ -279,8 +274,8 @@ def main():
                               np.average(controller_paths_lenght[i]),
                               np.average(task_times[i]),
                               np.min(controller_obstacles_distances[i]),
-                              np.average(controller_ME_linear_jerk),
-                              np.average(controller_ME_angular_jerk)])
+                              np.average(controller_ME_linear_jerk[i]),
+                              np.average(controller_ME_angular_jerk[i])])
 
     
     # Visualize results
