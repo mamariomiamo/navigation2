@@ -22,6 +22,8 @@ import pickle
 
 from tabulate import tabulate
 import nav_msgs.msg
+import matplotlib.pyplot as plt
+
 FATAL_COST = 210
 
 def getPaths(results):
@@ -49,21 +51,21 @@ def getControllerPath(tasks_poses):
 
 def getObstacleDistances(tasks_local_costmaps, local_costmap_resolution):
     print("local_costmap_resolution ", local_costmap_resolution)
-    controller_obstacle_distances = []
+    # Will contains minimum obstacle distance for each controller
+    controllers_obstacle_distances_min = []
+    controllers_min_obstacle_distances_std = []
+    controllers_min_obstacle_distances_avg = []
     # for each task / navigation
     for task_local_costamps in tasks_local_costmaps:
         # for each controller
         for controller_local_costmaps in task_local_costamps:
             min_obst_dist = 1e10
+            # Will contain history of nearest obstacle distance of the controller
+            # for this task, used to compute man and std
+            controller_task_min_obstacle_distances = []
             for local_costmap in controller_local_costmaps:
-                """
-                # Heat map
-                plt.imshow( local_costmap, cmap = 'rainbow' , interpolation = 'bilinear')
-                # Add Title
-                plt.title( "Heat Map" )
-                # Display
-                plt.show()
-                """
+
+                
                 if local_costmap.max()>=FATAL_COST:
                     # Look for obstacle
                     obstacles_indexes = np.where(local_costmap>FATAL_COST)
@@ -72,13 +74,37 @@ def getObstacleDistances(tasks_local_costmaps, local_costmap_resolution):
                     obstacles_indexes_x=np.add(obstacles_indexes[0],-np.round(local_costmap.shape[0]))
                     obstacles_indexes_y=np.add(obstacles_indexes[1],-np.round(local_costmap.shape[1]))
 
+                    iteration_minimum_distance =  1e10
                     for x, y in zip(obstacles_indexes_x,obstacles_indexes_y):
-                        osbstacle_distance = math.sqrt(x**2 + y**2) * local_costmap_resolution
-                        if osbstacle_distance < min_obst_dist:
-                            #print("New min obstacle distance found: ",osbstacle_distance)
-                            min_obst_dist = osbstacle_distance
-            controller_obstacle_distances.append(min_obst_dist)
-    return controller_obstacle_distances
+                        
+                        obstacle_distance = math.sqrt(x**2 + y**2) * local_costmap_resolution
+                        if obstacle_distance <iteration_minimum_distance:
+                           iteration_minimum_distance = obstacle_distance
+
+                        if obstacle_distance < min_obst_dist:
+                            # if obstacle_distance < 0.1:
+                            #     print("New min obstacle distance found: ",obstacle_distance)
+                            #     # Heat map
+                            #     plt.imshow( local_costmap, cmap = 'rainbow' , interpolation = 'bilinear')
+                            #     # Add Title
+                            #     plt.title( "Heat Map" )
+                            #     # Display
+                            #     plt.show()
+                            min_obst_dist = obstacle_distance
+                    if iteration_minimum_distance == 1e10:
+                        # TODO (@Enrico) maybe avoid appending at all 
+                        iteration_minimum_distance = np.nan
+                    controller_task_min_obstacle_distances.append(iteration_minimum_distance)
+                        
+            if (min_obst_dist == 1e10):
+                # TODO (@Enrico) maybe avoid appending at all 
+                min_obst_dist = np.nan
+
+            controllers_min_obstacle_distances_avg.append(np.nanmean(controller_task_min_obstacle_distances))
+            controllers_min_obstacle_distances_std.append(np.nanstd(controller_task_min_obstacle_distances))
+
+            controllers_obstacle_distances_min.append(min_obst_dist)
+    return controllers_obstacle_distances_min, controllers_min_obstacle_distances_avg, controllers_min_obstacle_distances_std
 
 def getControllerMSJerks(controller_twists):
     linear_x = []
@@ -213,8 +239,10 @@ def main():
     
     # TODO take into account failed navigations (no error is produced) 
     # Minimum distance
-    controller_obstacles_distances = getObstacleDistances(tasks_controller_local_costmaps, local_costmap_resolution)
+    controller_obstacles_distances,controller_obstacles_distances_avg, controller_obstacles_distances_std = getObstacleDistances(tasks_controller_local_costmaps, local_costmap_resolution)
     controller_obstacles_distances = refactorArray(controller_obstacles_distances,total_paths, len(controllers))
+    controller_obstacles_distances_avg = refactorArray(controller_obstacles_distances_avg,total_paths, len(controllers))
+    controller_obstacles_distances_std = refactorArray(controller_obstacles_distances_std,total_paths, len(controllers))
     
     # Smoothness
     controller_ME_linear_jerk = []
@@ -252,19 +280,23 @@ def main():
     task_times = task_times[np.isfinite(task_times)]    
     # Generate table
     planner_table = [['Controller',
-                      'Success'+
-                      '\nrate',
-                      'Average linear'+
-                      '\nspeed (m/s)',
-                      'Average controller'+
-                      '\npath len (m) ',
-                      'Average time taken(s)) ',
-                      'Minimum distance (m)'+
-                      '\nfrom obstacle',
-                      'Avg integrated x jerk' +
-                      '\n(m^2/s^6)',
-                      'Avg integrated z jerk' +
-                      '\n(m/s^6)']]
+                        'Success'+
+                        '\nrate',
+                        'Average linear'+
+                        '\nspeed (m/s)',
+                        'Average controller'+
+                        '\npath len (m) ',
+                        'Average time taken(s)) ',
+                        'Minimum distance (m)'+
+                        '\nfrom obstacle',
+                        'Minimum distance avg (m)'+
+                        '\nfrom obstacle',
+                        'Minimum distance std (m)'+
+                        '\nfrom obstacle',
+                        'Avg integrated x jerk' +
+                        '\n(m^2/s^6)',
+                        'Avg integrated z jerk' +
+                        '\n(m/s^6)']]
 
     
     for i in range(0, len(controllers)):
@@ -274,14 +306,15 @@ def main():
                               np.average(controller_paths_lenght[i]),
                               np.average(task_times[i]),
                               np.min(controller_obstacles_distances[i]),
+                              np.average(controller_obstacles_distances_avg[i]),
+                              np.average(controller_obstacles_distances_std[i]),
                               np.average(controller_ME_linear_jerk[i]),
                               np.average(controller_ME_angular_jerk[i])])
-
-    
     # Visualize results
     print("Planned average len: ", np.average(path_lengths))
     print("Total number of tasks: ", len(tasks_results))
     print(tabulate(planner_table))
+
 
 if __name__ == '__main__':
     main()
