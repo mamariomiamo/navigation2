@@ -278,6 +278,9 @@ def main():
     task_times = refactorArray(task_times,total_paths, len(controllers))
     # Remove np.nan
     task_times = task_times[np.isfinite(task_times)]    
+    
+    # TODO (@enricosutera) this should be transposed
+    # TODO  controller as columns header and metrics as rows
     # Generate table
     planner_table = [['Controller',
                         'Success'+
@@ -286,13 +289,12 @@ def main():
                         '\nspeed (m/s)',
                         'Average controller'+
                         '\npath len (m) ',
-                        'Average time taken(s)) ',
-                        'Minimum distance (m)'+
+                        'Average time' +
+                        '\ntaken(s) ',
+                        'Min dist (m)'+
                         '\nfrom obstacle',
-                        'Minimum distance avg (m)'+
-                        '\nfrom obstacle',
-                        'Minimum distance std (m)'+
-                        '\nfrom obstacle',
+                        '--> avg (m)',
+                        '--> std (m)',
                         'Avg integrated x jerk' +
                         '\n(m^2/s^6)',
                         'Avg integrated z jerk' +
@@ -313,7 +315,7 @@ def main():
     # Visualize results
     print("Planned average len: ", np.average(path_lengths))
     print("Total number of tasks: ", len(tasks_results))
-    print(tabulate(planner_table))
+    print(tabulate(planner_table, headers="firstrow", showindex="always", floatfmt=".3f" ))
 
 
 if __name__ == '__main__':
