@@ -134,7 +134,8 @@ def generate_launch_description():
     start_gazebo_server_cmd = ExecuteProcess(
         condition=IfCondition(use_simulator),
         cmd=['gzserver', '-s', 'libgazebo_ros_init.so',
-             '-s', 'libgazebo_ros_factory.so', world],
+            '-s', 'libgazebo_ros_factory.so',
+            '-s', 'libgazebo_ros_state.so', world],
         cwd=[launch_dir], output='screen')
 
     start_gazebo_client_cmd = ExecuteProcess(

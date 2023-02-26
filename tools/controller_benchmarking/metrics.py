@@ -15,9 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from geometry_msgs.msg import PoseStamped, Twist, TwistStamped
+from geometry_msgs.msg import PoseStamped, Twist, TwistStamped, Pose
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Empty
+from gazebo_msgs.srv import SetEntityState, GetEntityState
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy
 from rclpy.node import Node
@@ -35,6 +36,9 @@ from random import randint
 from random import uniform
 from threading import Thread
 from transforms3d.euler import euler2quat
+
+OBSTACLE_SPEED = 0.1
+OBSTACLE_DISTANCE = 0.5
 
 def getPlannerResults(navigator, initial_pose, goal_pose, planners):
     results = []
@@ -125,17 +129,48 @@ class OdomListener(Node):
     def odom_callback(self, msg):
         self.odom_msg = msg
 
-class GazeboWorldReset(Node):
+class GazeboInterface(Node):
 
     def __init__(self):
-        super().__init__('gazebo_world_reset')
-        self.cli = self.create_client(Empty, 'reset_world')
+        super().__init__('gazebo_interface')
+        self.reset_world_client = self.create_client(Empty, 'reset_world')
+        self.set_entity_client = self.create_client(SetEntityState, 'set_entity_state')
+        self.get_entity_client = self.create_client(GetEntityState, 'get_entity_state')
         
+    # def reset_world(self):
+    #     while not self.reset_world_client.wait_for_service(timeout_sec=1.0):
+    #         self.get_logger().info('service not available, waiting again...')
+    #     self.req = Empty.Request()
+    #     self.future = self.reset_world_client.call_async(self.req)
+    #     rclpy.spin_until_future_complete(self, self.future)
+    #     return self.future.result()
+    
     def reset_world(self):
-        while not self.cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service not available, waiting again...')
-        self.req = Empty.Request()
-        self.future = self.cli.call_async(self.req)
+        req = Empty.Request()
+        return self.make_client_aync_call(self.reset_world_client, req)
+    
+    def get_entity_state(self, name):
+        req = GetEntityState.Request()
+        req.name = name
+        return self.make_client_aync_call(self.get_entity_client, req)
+
+    def set_entity_state(self, name, pose, twist):
+        req = SetEntityState.Request()
+        req.state.name = name
+        req.state.pose = pose
+        req.state.twist = twist
+        return self.make_client_aync_call(self.set_entity_client, req)
+    
+    def get_entity_state(self, name):
+        req = GetEntityState.Request()
+        req.name = name
+        return self.make_client_aync_call(self.get_entity_client, req)
+
+    def make_client_aync_call(self, client, req):
+        while not client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service {} not available, waiting again...'.format(client.srv_name))
+
+        self.future = client.call_async(req)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
 
@@ -145,8 +180,46 @@ def spin_executor(executor):
      except rclpy.executors.ExternalShutdownException:
           pass
 
+def ActivateObstacle(gazebo_interface_node, start_pose, goal_pose):
+    print("Activating obstacle")    
+    # Compute direction from goal to start for obstacle direction
+    x_diff = start_pose.pose.position.x - goal_pose.pose.position.x
+    y_diff = start_pose.pose.position.y - goal_pose.pose.position.y
+    yaw = math.atan2(y_diff, x_diff)
+    quad = euler2quat(0.0, 0.0, yaw)
+    twist = Twist()
+    twist.linear.x =  OBSTACLE_SPEED*math.cos(yaw)
+    twist.linear.y =  OBSTACLE_SPEED*math.sin(yaw)
+    twist.angular.z = 0.0
+    pose = Pose()
+    pose.position.x = goal_pose.pose.position.x
+    pose.position.y = goal_pose.pose.position.y
+    pose.position.z = 0.0
+    pose.orientation.w = quad[0]
+    pose.orientation.x = quad[1]
+    pose.orientation.y = quad[2]
+    pose.orientation.z = quad[3]
+    # result = gazebo_interface_node.set_entity_state('person_standing', pose, twist)
+    result = gazebo_interface_node.set_entity_state('obstacle', pose, twist)
+    print(result)
+    return
 
-def getControllerResults(navigator, path, controllers, start_pose):
+def UpdateObstacle(gazebo_interface_node,robot_pose):
+    # Update obstacle position
+    result = gazebo_interface_node.get_entity_state('obstacle')
+    obstacle_pose = result.state.pose
+
+    # Check distance from obstacle to robot
+    x_diff = robot_pose.pose.position.x - obstacle_pose.position.x
+    y_diff = robot_pose.pose.position.y - obstacle_pose.position.y
+    dist = math.sqrt(x_diff*x_diff + y_diff*y_diff)
+    if dist < OBSTACLE_DISTANCE:
+        # Stop obstacle
+        twist = Twist()
+        result = gazebo_interface_node.set_entity_state('obstacle', obstacle_pose, twist)
+    return
+
+def getControllerResults(navigator, path, controllers, start_pose, dynamics_obstacles = True):
     # Initialize results
     task_twists = []
     task_poses = []
@@ -155,28 +228,32 @@ def getControllerResults(navigator, path, controllers, start_pose):
     
     cmd_vel_subscriber_node = CmdVelListener()
     odom_subscriber_node = OdomListener()
-    gazebo_resetter =  GazeboWorldReset()
+    gazebo_interface_node =  GazeboInterface()
     sub_executor = rclpy.executors.MultiThreadedExecutor()
     sub_executor.add_node(cmd_vel_subscriber_node)
     sub_executor.add_node(odom_subscriber_node)
-    sub_executor.add_node(gazebo_resetter)
+    sub_executor.add_node(gazebo_interface_node)
     sub_thread = Thread(target=spin_executor, args=(sub_executor, ), daemon=True)
     sub_thread.start()
     # Wait for clock to be received
     time.sleep(0.3)
 
     after_reset_pose = odom_subscriber_node.odom_msg.pose.pose
-    gazebo_resetter.reset_world()
+    gazebo_interface_node.reset_world()
     after_reset_pose = odom_subscriber_node.odom_msg.pose.pose
     # Since /reset_world service has not boolen result, hand check world has been reset...
     while (abs(start_pose.pose.position.x - after_reset_pose.position.x) > 0.01 and
           abs(start_pose.pose.position.y - after_reset_pose.position.y) > 0.01):
         print("Resetting again world...")
-        gazebo_resetter.reset_world()
+        gazebo_interface_node.reset_world()
         after_reset_pose = odom_subscriber_node.odom_msg.pose.pose
         time.sleep(0.5)
+    
     for controller in controllers:
 
+        if dynamics_obstacles:
+            ActivateObstacle(gazebo_interface_node, start_pose, path.path.poses[-1])
+             
         print("Getting controller: ", controller)
         i = 0
         navigator.clearLocalCostmap()
@@ -194,6 +271,10 @@ def getControllerResults(navigator, path, controllers, start_pose):
             pose.header.stamp = odom_subscriber_node.get_clock().now().to_msg()
             task_controller_poses.append(copy.deepcopy(pose))
             
+            if dynamics_obstacles:
+                # Update obstacle position
+                UpdateObstacle(gazebo_interface_node, pose)
+
             # Get the local costmap for future metrics
             costmap_msg = navigator.getLocalCostmap()
             costmap = np.asarray(costmap_msg.data)
@@ -215,11 +296,11 @@ def getControllerResults(navigator, path, controllers, start_pose):
         task_twists.append(task_controller_twists)
         task_poses.append(task_controller_poses)
         task_local_costmaps.append(task_controller_local_costmaps)
-        gazebo_resetter.reset_world()
+        gazebo_interface_node.reset_world()
     print("Cleaning resources ...")
     cmd_vel_subscriber_node.destroy_node()
     odom_subscriber_node.destroy_node()
-    gazebo_resetter.destroy_node()
+    gazebo_interface_node.destroy_node()
     sub_executor.shutdown()
     sub_thread.join()
     print("Thread joint")
@@ -290,6 +371,7 @@ def main():
             continue
         # Change back map, planner will no more use this. Local costmap uses this map
         # with obstalce info
+
         task_controller_results,task_twists,task_poses, task_local_costmaps = getControllerResults(navigator, result[0], controllers, start)
         tasks_controller_results.append(task_controller_results)
         tasks_controller_twists.append(task_twists)
