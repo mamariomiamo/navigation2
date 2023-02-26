@@ -36,13 +36,12 @@ from random import uniform
 from threading import Thread
 from transforms3d.euler import euler2quat
 
-
 def getPlannerResults(navigator, initial_pose, goal_pose, planners):
     results = []
     for planner in planners:
         navigator.clearGlobalCostmap()
         path = navigator._getPathImpl(initial_pose, goal_pose, planner, use_start=True)
-        if path is not None:
+        if path is not None and len(path.path.poses)> 0:
             results.append(path)
         else:
             return results
@@ -83,7 +82,7 @@ def getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res):
         x_diff = goal_x - start_x
         y_diff = goal_y - start_y
         dist = math.sqrt(x_diff ** 2 + y_diff ** 2)
-        if costmap[row, col] < max_cost and dist > 3.0:
+        if costmap[row, col] < max_cost and dist > 4.0:
             goal.pose.position.x = goal_x
             goal.pose.position.y = goal_y
 
@@ -236,8 +235,10 @@ def main():
     print("Waiting for planner and controller servers to activate")
     navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
+    map_name = navigator.declare_parameter('map_name', "10by10_empty")
+    print("Selected map: ", map_name.value)
     # Set map to use, other options: 100by100_15, 100by100_10
-    map_path = os.getcwd() + '/' + glob.glob('**/maps/10by10_empty.yaml', recursive=True)[0]
+    map_path = os.getcwd() + '/' + glob.glob('**/maps/'+ map_name.value + '.yaml', recursive=True)[0]
 
     navigator.changeMap(map_path)
     time.sleep(2)  
@@ -275,8 +276,8 @@ def main():
         start = PoseStamped()
         start.header.frame_id = 'map'
         start.header.stamp = time_stamp
-        start.pose.position.x = 1.0
-        start.pose.position.y = 1.0
+        start.pose.position.x = 0.0
+        start.pose.position.y = 0.0
         goal = getRandomGoal(costmap, start, max_cost, side_buffer, time_stamp, res)
         #print("Start", start)
         #print("Goal", goal)
