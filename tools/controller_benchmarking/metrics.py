@@ -37,8 +37,8 @@ from random import uniform
 from threading import Thread
 from transforms3d.euler import euler2quat
 
-OBSTACLE_SPEED = 0.1
-OBSTACLE_DISTANCE = 0.5
+OBSTACLE_SPEED = 0.1 # m/s
+OBSTACLE_DISTANCE = 0.5 # m
 
 def getPlannerResults(navigator, initial_pose, goal_pose, planners):
     results = []
@@ -219,7 +219,7 @@ def UpdateObstacle(gazebo_interface_node,robot_pose):
         result = gazebo_interface_node.set_entity_state('obstacle', obstacle_pose, twist)
     return
 
-def getControllerResults(navigator, path, controllers, start_pose, dynamics_obstacles = True):
+def getControllerResults(navigator, path, controllers, start_pose, dynamic_obstacles = False):
     # Initialize results
     task_twists = []
     task_poses = []
@@ -251,7 +251,7 @@ def getControllerResults(navigator, path, controllers, start_pose, dynamics_obst
     
     for controller in controllers:
 
-        if dynamics_obstacles:
+        if dynamic_obstacles:
             ActivateObstacle(gazebo_interface_node, start_pose, path.path.poses[-1])
              
         print("Getting controller: ", controller)
@@ -271,7 +271,7 @@ def getControllerResults(navigator, path, controllers, start_pose, dynamics_obst
             pose.header.stamp = odom_subscriber_node.get_clock().now().to_msg()
             task_controller_poses.append(copy.deepcopy(pose))
             
-            if dynamics_obstacles:
+            if dynamic_obstacles:
                 # Update obstacle position
                 UpdateObstacle(gazebo_interface_node, pose)
 
@@ -317,6 +317,8 @@ def main():
     navigator.waitUntilNav2Active('planner_server', 'controller_server')
 
     map_name = navigator.declare_parameter('map_name', "10by10_empty")
+    dynamic_obstacles_parameter = navigator.declare_parameter('dynamic_obstacles', False)
+    dynamic_obstacles = dynamic_obstacles_parameter.value
     print("Selected map: ", map_name.value)
     # Set map to use, other options: 100by100_15, 100by100_10
     map_path = os.getcwd() + '/' + glob.glob('**/maps/'+ map_name.value + '.yaml', recursive=True)[0]
@@ -372,7 +374,7 @@ def main():
         # Change back map, planner will no more use this. Local costmap uses this map
         # with obstalce info
 
-        task_controller_results,task_twists,task_poses, task_local_costmaps = getControllerResults(navigator, result[0], controllers, start)
+        task_controller_results,task_twists,task_poses, task_local_costmaps = getControllerResults(navigator, result[0], controllers, start, dynamic_obstacles)
         tasks_controller_results.append(task_controller_results)
         tasks_controller_twists.append(task_twists)
         tasks_controller_poses.append(task_poses)
