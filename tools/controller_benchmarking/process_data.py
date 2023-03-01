@@ -22,9 +22,8 @@ import pickle
 
 from tabulate import tabulate
 import nav_msgs.msg
-import matplotlib.pyplot as plt
 
-FATAL_COST = 210
+FATAL_COST = 253
 
 def getPaths(results):
     paths = []
