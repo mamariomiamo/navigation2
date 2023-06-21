@@ -302,7 +302,7 @@ def main():
     
     for i in range(0, len(controllers)):
         planner_table.append([controllers[i],
-                              np.sum(tasks_results[i]),
+                              np.sum(tasks_results, axis=0)[i] / len(tasks_results),
                               np.average(speeds_x[i]),
                               np.average(controller_paths_lenght[i]),
                               np.average(task_times[i]),
